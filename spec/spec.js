@@ -1,11 +1,12 @@
 describe("Sisyphus", function() {
-	var sisyphus, targetForm;
-	
+	var sisyphus, targetForm, namedForm;
+
 	beforeEach( function() {
 		loadFixtures( "fixtures.html" );
 		sisyphus = Sisyphus.getInstance();
 		sisyphus.setOptions( {} );
 		targetForm = $( "#form1" );
+		namedForm = $( "#named" );
 		sisyphus.protect( targetForm );
 	} );
 	
@@ -18,7 +19,7 @@ describe("Sisyphus", function() {
 		var sisyphus1 = Sisyphus.getInstance();
 		expect( typeof sisyphus1 ).toEqual( "object" );
 	} );
-	
+
 	it( "should return null on freeing", function() {
 		sisyphus = Sisyphus.free();
 		expect( sisyphus ).toEqual( null );
@@ -46,7 +47,7 @@ describe("Sisyphus", function() {
 	
 	
 	it( "should return false if Local Storage is unavailable", function() {
-		spyOn( sisyphus, "isLocalStorageAvailable" ).andCallFake( function() { 
+		spyOn( sisyphus.browserStorage, "isAvailable" ).andCallFake( function() {
 			return false;
 		} );
 		expect( sisyphus.protect( targetForm ) ).toEqual( false );
@@ -77,6 +78,13 @@ describe("Sisyphus", function() {
 		expect( targets1 ).toBeLessThan( targets2 );
 	} );
 	
+	it( "should allow a custom name for the form", function() {
+		sisyphus = Sisyphus.getInstance();
+		sisyphus.setOptions( { name: "something" } );
+		sisyphus.protect( namedForm );
+		expect ( sisyphus.href ).toEqual( "something" );
+	} );
+
 	it( "should not protect the same form twice and more times", function() {
 		// #form1 is already being protected from 'beforeEach' method
 		var targets1 = 	sisyphus.targets.length,
@@ -89,9 +97,9 @@ describe("Sisyphus", function() {
 	
 	
 	it( "should save textfield data on key input, if options.timeout is not set", function() {
-		spyOn( sisyphus, "saveToLocalStorage" );
+		spyOn( sisyphus, "saveToBrowserStorage" );
 		$( ":text:first", targetForm ).trigger( "oninput" );
-		expect( sisyphus.saveToLocalStorage ).toHaveBeenCalled();
+		expect( sisyphus.saveToBrowserStorage ).toHaveBeenCalled();
 	} );
 	
 	it( "should not save all data, but textfield only on key input, if options.timeout is not set", function() {
@@ -101,9 +109,9 @@ describe("Sisyphus", function() {
 	} );
 	
 	it( "should save textarea data on key input, if options.timeout is not set", function() {
-		spyOn( sisyphus, "saveToLocalStorage" );
+		spyOn( sisyphus, "saveToBrowserStorage" );
 		$( "textarea:first", targetForm ).trigger( "oninput" );
-		expect( sisyphus.saveToLocalStorage ).toHaveBeenCalled();
+		expect( sisyphus.saveToBrowserStorage ).toHaveBeenCalled();
 	} );
 	
 	it( "should not save all data, but textarea only on key input, if options.timeout is not set", function() {
@@ -139,7 +147,7 @@ describe("Sisyphus", function() {
 	
 	it( "should fire callback on saving data to Local Storage", function() {
 		spyOn( sisyphus.options, "onSave" );
-		sisyphus.saveToLocalStorage( "key", "value" );
+		sisyphus.saveToBrowserStorage( "key", "value" );
 		expect( sisyphus.options.onSave ).toHaveBeenCalled();
 	} );
 	
@@ -150,9 +158,6 @@ describe("Sisyphus", function() {
 	} );
 	
 	it( "should fire callback on restoring data from Local Storage", function() {
-		spyOn( localStorage, "getItem" ).andCallFake( function() { 
-			return "value";
-		} );
 		spyOn( sisyphus.options, "onRestore" );
 		sisyphus.restoreAllData();
 		expect( sisyphus.options.onRestore ).toHaveBeenCalled();
@@ -177,19 +182,28 @@ describe("jQuery.sisyphus", function() {
 	beforeEach( function() {
 		loadFixtures( "fixtures.html" );
 	} );
-	
-	
+
 	it( "should return a Sisyphus instance", function() {
+		var form = $( "#form1");
+		var identifier = '[id=' + form.attr( "id" ) + '][name=' + form.attr( "name" ) + ']';
 		var o =  $( "#form1" ).sisyphus(),
-			sisyphus = Sisyphus.getInstance();
+				sisyphus = Sisyphus.getInstance( identifier );
 		expect( o ).toEqual( sisyphus );
 	} );
-	
-	
+
+	it( "should set the custom name on the Sisyphus instance", function() {
+		Sisyphus.free()
+		var o = $(" #named" ).sisyphus( { name: "custom-name" } );
+			sisyphus = Sisyphus.getInstance();
+		expect( o.href ).toEqual( "custom-name" );
+	} );
+
 	it( "should protect matched forms with Sisyphus", function() {
-		spyOn( Sisyphus.getInstance(), "protect" );
+		var form = $( "#form1");
+		var identifier = '[id=' + form.attr( "id" ) + '][name=' + form.attr( "name" ) + ']';
+		spyOn( Sisyphus.getInstance( identifier ), "protect" );
 		$( "#form1" ).sisyphus(),
-		expect( Sisyphus.getInstance().protect ).toHaveBeenCalled();
+		expect( Sisyphus.getInstance( identifier ).protect ).toHaveBeenCalled();
 	} );
 	
 });

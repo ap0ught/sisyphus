@@ -1,35 +1,116 @@
 /**
  * Plugin developed to save html forms data to LocalStorage to restore them after browser crashes, tabs closings
- * and other disasters.
+ * and other disasters. 
+ * 
+ * https://github.com/simsalabim/sisyphus
  *
  * @author Alexander Kaupanin <kaupanin@gmail.com>
+ * @license MIT - see https://github.com/simsalabim/sisyphus/blob/master/MIT-LICENSE
  */
-	
-//$.sisyphus().setOptions({timeout: 15})
+
 ( function( $ ) {
-	$.sisyphus = function() {
-		return Sisyphus.getInstance();
-	};
+
+	function getElementIdentifier(el) {
+			return '[id=' + el.attr( "id" ) + '][name=' + el.attr( "name" ) + ']';
+	}
 
 	$.fn.sisyphus = function( options ) {
-		var sisyphus = Sisyphus.getInstance();
-		sisyphus.setOptions( options )
-		sisyphus.protect( this );
+		var identifier = $.map( this, function( obj ) {
+			return getElementIdentifier( $( obj ) );
+		}).join();
+
+		var sisyphus = Sisyphus.getInstance( identifier );
+		sisyphus.protect( this, options );
 		return sisyphus;
 	};
 
-	
+	var browserStorage = {};
+
+	/**
+	 * Check if local storage or other browser storage is available
+	 *
+	 * @return Boolean
+	 */
+	browserStorage.isAvailable = function() {
+		if ( typeof $.jStorage === "object" ) {
+			return true;
+		}
+		try {
+			return localStorage.getItem;
+		} catch ( e ) {
+			return false;
+		}
+	};
+
+	/**
+	 * Set data to browser storage
+	 *
+	 * @param [String] key
+	 * @param [String] value
+	 *
+	 * @return Boolean
+	 */
+	browserStorage.set = function( key, value ) {
+		if ( typeof $.jStorage === "object" ) {
+			$.jStorage.set( key, value + "" );
+		} else {
+			try {
+				localStorage.setItem( key, value + "" );
+			} catch ( e ) {
+				//QUOTA_EXCEEDED_ERR
+			}
+		}
+	};
+
+	/**
+	 * Get data from browser storage by specified key
+	 *
+	 * @param [String] key
+	 *
+	 * @return string
+	 */
+	browserStorage.get = function( key ) {
+		if ( typeof $.jStorage === "object" ) {
+			var result = $.jStorage.get( key );
+			return result ? result.toString() : result;
+		} else {
+			return localStorage.getItem( key );
+		}
+	};
+
+	/**
+	 * Delete data from browser storage by specified key
+	 *
+	 * @param [String] key
+	 *
+	 * @return void
+	 */
+	browserStorage.remove = function( key ) {
+		if ( typeof $.jStorage === "object" ) {
+			$.jStorage.deleteKey( key );
+		} else {
+			localStorage.removeItem( key );
+		}
+	};
+
 	Sisyphus = ( function() {
 		var params = {
-			instantiated: null,
-			started: null
+			instantiated: [],
+			started: []
 		};
-	
+		var CKEDITOR = window.CKEDITOR;
+
 		function init () {
-		
+
 			return {
-			
-			
+				setInstanceIdentifier: function( identifier ) {
+					this.identifier = identifier;
+				},
+
+				getInstanceIdentifier: function() {
+					return this.identifier;
+				},
+
 				/**
 				 * Set plugin initial options
 				 *
@@ -39,16 +120,21 @@
 				 */
 				setInitialOptions: function ( options ) {
 					var defaults = {
-						excludeFields: null,
-						customKeyPrefix: "",
+						excludeFields: [],
+						customKeySuffix: "",
+						locationBased: false,
 						timeout: 0,
+						autoRelease: true,
+						onBeforeSave: function() {},
 						onSave: function() {},
+						onBeforeRestore: function() {},
 						onRestore: function() {},
 						onRelease: function() {}
 					};
 					this.options = this.options || $.extend( defaults, options );
-				}, 
-			
+					this.browserStorage = browserStorage;
+				},
+
 				/**
 				 * Set plugin options
 				 *
@@ -59,53 +145,78 @@
 				setOptions: function ( options ) {
 					this.options = this.options || this.setInitialOptions( options );
 					this.options = $.extend( this.options, options );
-				}, 
-			
-			
+				},
+
 				/**
 				 * Protect specified forms, store it's fields data to local storage and restore them on page load
 				 *
-				 * @param [Object] targets    forms object(s), result of jQuery selector
-				 * @param Object options      plugin options
+				 * @param [Object] targets		forms object(s), result of jQuery selector
+				 * @param Object options			plugin options
 				 *
 				 * @return void
 				 */
-				protect: function( targets ) {
+				protect: function( targets, options ) {
+					this.setOptions( options );
 					targets = targets || {};
 					var self = this;
 					this.targets = this.targets || [];
-					this.href = location.hostname + location.pathname + location.search;
-				
+					if ( self.options.name ) {
+						this.href = self.options.name;
+					} else {
+						this.href = location.hostname + location.pathname + location.search + location.hash;
+					}
 					this.targets = $.merge( this.targets, targets );
 					this.targets = $.unique( this.targets );
 					this.targets = $( this.targets );
-					if ( ! this.isLocalStorageAvailable() ) {
+					if ( ! this.browserStorage.isAvailable() ) {
 						return false;
 					}
-				
-					self.restoreAllData();
-					self.bindReleaseData();
-					if ( ! params.started ) {
-						self.bindSaveData();
-						params.started = true;
+
+					var callback_result = self.options.onBeforeRestore.call( self );
+					if ( callback_result === undefined || callback_result ) {
+						self.restoreAllData();
+					}
+
+					if ( this.options.autoRelease ) {
+						self.bindReleaseData();
+					}
+
+					if ( ! params.started[ this.getInstanceIdentifier() ] ) {
+						if ( self.isCKEditorPresent() ) {
+							var intervalId = setInterval( function() {
+								if (CKEDITOR.isLoaded) {
+									clearInterval(intervalId);
+									self.bindSaveData();
+									params.started[ self.getInstanceIdentifier() ] = true;
+								}
+							}, 100);
+						} else {
+							self.bindSaveData();
+							params.started[ self.getInstanceIdentifier() ] = true;
+						}
 					}
 				},
-			
-			
-				/**
-				 * Check if local storage is available
-				 *
-				 * @return Boolean
-				 */
-				isLocalStorageAvailable: function() {
-					try {
-						return localStorage.getItem;
-					} catch ( e ) {
+
+				isCKEditorPresent: function() {
+					if ( this.isCKEditorExists() ) {
+						CKEDITOR.isLoaded = false;
+						CKEDITOR.on('instanceReady', function() {
+							CKEDITOR.isLoaded = true;
+						} );
+						return true;
+					} else {
 						return false;
 					}
 				},
-			
-			
+
+				isCKEditorExists: function() {
+					return typeof CKEDITOR !== "undefined";
+				},
+
+				findFieldsToProtect: function( target ) {
+					return target.find( ":input" ).not( ":submit" ).not( ":reset" ).not( ":button" ).not( ":file" ).not( ":password" ).not( ":disabled" ).not( "[readonly]" );
+				},
+
 				/**
 				 * Bind saving data
 				 *
@@ -113,82 +224,92 @@
 				 */
 				bindSaveData: function() {
 					var self = this;
-				
+
 					if ( self.options.timeout ) {
 						self.saveDataByTimeout();
 					}
-				
+
 					self.targets.each( function() {
-						var targetFormId = $( this ).attr( "id" );
-						var fieldsToProtect = $( this ).find( ":input" ).not( ":submit" ).not( ":reset" ).not( ":button" );
-						
-						fieldsToProtect.each( function() {
+						var targetFormIdAndName = getElementIdentifier( $( this ) );
+						self.findFieldsToProtect( $( this ) ).each( function() {
 							if ( $.inArray( this, self.options.excludeFields ) !== -1 ) {
 								// Returning non-false is the same as a continue statement in a for loop; it will skip immediately to the next iteration.
 								return true;
 							}
 							var field = $( this );
-							var prefix = self.href + targetFormId + field.attr( "name" ) + self.options.customKeyPrefix;
+							var prefix = (self.options.locationBased ? self.href : "") + targetFormIdAndName + getElementIdentifier( field ) + self.options.customKeySuffix;
 							if ( field.is( ":text" ) || field.is( "textarea" ) ) {
 								if ( ! self.options.timeout ) {
 									self.bindSaveDataImmediately( field, prefix );
 								}
-							} else {
-								self.bindSaveDataOnChange( field, prefix );
 							}
+							self.bindSaveDataOnChange( field );
 						} );
-					} )
+					} );
 				},
-			
-			
+
 				/**
 				 * Save all protected forms data to Local Storage.
-				 * Common method, necessary to not lead astray user firing 'data are saved' when select/checkbox/radio
-				 * is changed and saved, while textfield data are saved only by timeout
+				 * Common method, necessary to not lead astray user firing 'data is saved' when select/checkbox/radio
+				 * is changed and saved, while text field data is saved only by timeout
 				 *
 				 * @return void
 				 */
 				saveAllData: function() {
 					var self = this;
 					self.targets.each( function() {
-						var targetFormId = $( this ).attr( "id" );
-						var fieldsToProtect = $( this ).find( ":input" ).not( ":submit" ).not( ":reset" ).not( ":button" );
-						
-						fieldsToProtect.each( function() {
-							if ( $.inArray( this, self.options.excludeFields ) !== -1 ) {
+						var targetFormIdAndName = getElementIdentifier( $( this ) );
+						var multiCheckboxCache = {};
+
+						self.findFieldsToProtect( $( this) ).each( function() {
+							var field = $( this );
+							if ( $.inArray( this, self.options.excludeFields ) !== -1 || ( field.attr( "name" ) === undefined && field.attr( "id" ) === undefined ) ) {
 								// Returning non-false is the same as a continue statement in a for loop; it will skip immediately to the next iteration.
 								return true;
 							}
-							var field = $( this );
-							var prefix = self.href + targetFormId + field.attr( "name" ) + self.options.customKeyPrefix;
+							var prefix = (self.options.locationBased ? self.href : "") + targetFormIdAndName + getElementIdentifier( field ) + self.options.customKeySuffix;
 							var value = field.val();
-						
+
 							if ( field.is(":checkbox") ) {
-								if ( field.attr( "name" ).indexOf( "[" ) != -1 ) {
+								var name = field.attr( "name" );
+								if ( name !== undefined && name.indexOf( "[" ) !== -1 ) {
+									if ( multiCheckboxCache[ name ] === true ) {
+										return;
+									}
 									value = [];
-									$( "[name='" + field.attr( "name" ) +"']:checked" ).each( function() {
+									$( "[name='" + name +"']:checked" ).each( function() {
 										value.push( $( this ).val() );
 									} );
+									multiCheckboxCache[ name ] = true;
 								} else {
 									value = field.is( ":checked" );
 								}
-								self.saveToLocalStorage( prefix, value, false );
+								self.saveToBrowserStorage( prefix, value, false );
 							} else if ( field.is( ":radio" ) ) {
 								if ( field.is( ":checked" ) ) {
 									value = field.val();
-									self.saveToLocalStorage( prefix, value, false );
+									self.saveToBrowserStorage( prefix, value, false );
+								} else {
+									self.browserStorage.remove( prefix );
 								}
 							} else {
-								self.saveToLocalStorage( prefix, value, false );
+								if ( self.isCKEditorExists() ) {
+									var editor = CKEDITOR.instances[ field.attr("name") ] || CKEDITOR.instances[ field.attr("id") ];
+									if ( editor ) {
+										editor.updateElement();
+										self.saveToBrowserStorage( prefix, field.val(), false);
+									} else {
+										self.saveToBrowserStorage( prefix, value, false );
+									}
+								} else {
+									self.saveToBrowserStorage( prefix, value, false );
+								}
 							}
 						} );
 					} );
-					if ( $.isFunction( self.options.onSave ) ) {
-						self.options.onSave.call();
-					}
+					self.options.onSave.call( self );
 				},
-			
-			
+
 				/**
 				 * Restore forms data from Local Storage
 				 *
@@ -197,79 +318,93 @@
 				restoreAllData: function() {
 					var self = this;
 					var restored = false;
-				
+
 					self.targets.each( function() {
 						var target = $( this );
-						var targetFormId = target.attr( "id" );
-						var fieldsToProtect = target.find( ":input" ).not( ":submit" ).not( ":reset" ).not( ":button" );
-						
-						fieldsToProtect.each( function() {
+						var targetFormIdAndName = getElementIdentifier( $( this ) );
+
+						self.findFieldsToProtect( target ).each( function() {
 							if ( $.inArray( this, self.options.excludeFields ) !== -1 ) {
 								// Returning non-false is the same as a continue statement in a for loop; it will skip immediately to the next iteration.
 								return true;
 							}
 							var field = $( this );
-							var prefix = self.href + targetFormId + field.attr( "name" ) + self.options.customKeyPrefix;
-							var resque = localStorage.getItem( prefix );
-							if ( resque ) {
+							var prefix = (self.options.locationBased ? self.href : "") + targetFormIdAndName + getElementIdentifier( field ) + self.options.customKeySuffix;
+							var resque = self.browserStorage.get( prefix );
+							if ( resque !== null ) {
 								self.restoreFieldsData( field, resque );
 								restored = true;
 							}
 						} );
 					} );
-				
-					if ( restored && $.isFunction( self.options.onRestore ) ) {
-						self.options.onRestore.call();
+
+					if ( restored ) {
+						self.options.onRestore.call( self );
 					}
 				},
-			
-			
+
 				/**
 				 * Restore form field data from local storage
 				 *
-				 * @param Object field    jQuery form element object
-				 * @param String resque   previously stored fields data
+				 * @param Object field		jQuery form element object
+				 * @param String resque	 previously stored fields data
 				 *
 				 * @return void
 				 */
 				restoreFieldsData: function( field, resque ) {
-					if ( field.is(":checkbox") && resque !== 'false' && field.attr("name").indexOf("[") === -1 ) {
-						field.attr( "checked", "checked" );
-					} else if ( field.is(":radio") ) {
-						if (field.val() === resque) {
-							field.attr("checked", "checked");
+					if ( field.attr( "name" ) === undefined && field.attr( "id" ) === undefined ) {
+						return false;
+					}
+					var name = field.attr( "name" );
+					if ( field.is( ":checkbox" ) && resque !== "false" && ( name === undefined || name.indexOf( "[" ) === -1 ) ) {
+						// If we aren't named by name (e.g. id) or we aren't in a multiple element field
+						field.prop( "checked", true );
+					} else if( field.is( ":checkbox" ) && resque === "false" && ( name === undefined || name.indexOf( "[" ) === -1 ) ) {
+						// If we aren't named by name (e.g. id) or we aren't in a multiple element field
+						field.prop( "checked", false );
+					} else if ( field.is( ":radio" ) ) {
+						if ( field.val() === resque ) {
+							field.prop( "checked", true );
 						}
-					} else if ( field.attr( "name" ).indexOf( "[" ) === -1 ) {
-						field.val( resque ); 
+					} else if ( name === undefined || name.indexOf( "[" ) === -1 ) {
+						// If we aren't named by name (e.g. id) or we aren't in a multiple element field
+						field.val( resque );
 					} else {
 						resque = resque.split( "," );
-						field.val( resque ); 
+						field.val( resque );
 					}
 				},
-			
-			
+
 				/**
 				 * Bind immediate saving (on typing/checking/changing) field data to local storage when user fills it
 				 *
-				 * @param Object field    jQuery form element object
-				 * @param String prefix   prefix used as key to store data in local storage
+				 * @param Object field		jQuery form element object
+				 * @param String prefix	 prefix used as key to store data in local storage
 				 *
 				 * @return void
 				 */
 				bindSaveDataImmediately: function( field, prefix ) {
 					var self = this;
-					if ( $.browser.msie == null ) {
-						field.get(0).oninput = function() {
-							self.saveToLocalStorage( prefix, field.val() );
-						}
-					} else {
+					if ( 'onpropertychange' in field ) {
 						field.get(0).onpropertychange = function() {
-							self.saveToLocalStorage( prefix, field.val() );
+							self.saveToBrowserStorage( prefix, field.val() );
+						};
+					} else {
+						field.get(0).oninput = function() {
+							self.saveToBrowserStorage( prefix, field.val() );
+						};
+					}
+					if ( this.isCKEditorExists() ) {
+						var editor = CKEDITOR.instances[ field.attr("name") ] || CKEDITOR.instances[ field.attr("id") ];
+						if ( editor ) {
+							editor.document.on( 'keyup', function() {
+								editor.updateElement();
+								self.saveToBrowserStorage( prefix, field.val() );
+							} );
 						}
 					}
 				},
-			
-			
+
 				/**
 				 * Save data to Local Storage and fire callback if defined
 				 *
@@ -279,36 +414,36 @@
 				 *
 				 * @return void
 				 */
-				saveToLocalStorage: function( key, value, fireCallback ) {
-					// if fireCallback is undefined it should be true
-					fireCallback = fireCallback == null ? true : fireCallback;
-					try {
-						localStorage.setItem( key, value + "" );
-					} catch (e) { 
-						//QUOTA_EXCEEDED_ERR
+				saveToBrowserStorage: function( key, value, fireCallback ) {
+					var self = this;
+					
+					var callback_result = self.options.onBeforeSave.call( self );
+					if ( callback_result !== undefined && callback_result === false ) {
+						return;
 					}
-					if ( fireCallback && value !== "" && $.isFunction( this.options.onSave ) ) {
-						this.options.onSave.call();
+
+					// if fireCallback is undefined it should be true
+					fireCallback = fireCallback === undefined ? true : fireCallback;
+					this.browserStorage.set( key, value );
+					if ( fireCallback && value !== "" ) {
+						this.options.onSave.call( this );
 					}
 				},
-			
-			
+
 				/**
 				 * Bind saving field data on change
 				 *
-				 * @param Object field    jQuery form element object
-				 * @param String prefix   prefix used as key to store data in local storage
+				 * @param Object field		jQuery form element object
 				 *
 				 * @return void
 				 */
-				bindSaveDataOnChange: function( field, prefix ) {
+				bindSaveDataOnChange: function( field ) {
 					var self = this;
 					field.change( function() {
 						self.saveAllData();
 					} );
 				},
-			
-			
+
 				/**
 				 * Saving (by timeout) field data to local storage when user fills it
 				 *
@@ -317,7 +452,7 @@
 				saveDataByTimeout: function() {
 					var self = this;
 					var targetForms = self.targets;
-					setTimeout( ( function( targetForms ) {
+					setTimeout( ( function() {
 						function timeout() {
 							self.saveAllData();
 							setTimeout( timeout, self.options.timeout * 1000 );
@@ -325,8 +460,7 @@
 						return timeout;
 					} )( targetForms ), self.options.timeout * 1000 );
 				},
-			
-			
+
 				/**
 				 * Bind release form fields data from local storage on submit/reset form
 				 *
@@ -334,63 +468,84 @@
 				 */
 				bindReleaseData: function() {
 					var self = this;
-					self.targets.each( function( i ) {
+					self.targets.each( function() {
 						var target = $( this );
-						var fieldsToProtect = target.find( ":input" ).not( ":submit" ).not( ":reset" ).not( ":button" );
-						var formId = target.attr( "id" );
+						var formIdAndName = getElementIdentifier( target );
 						$( this ).bind( "submit reset", function() {
-							self.releaseData( formId, fieldsToProtect );
-						} )
-					} )
-				
-				
+							self.releaseData( formIdAndName, self.findFieldsToProtect( target ) );
+						} );
+					} );
 				},
-			
-			
+
 				/**
-				 * Bind release form fields data from local storage on submit/resett form
-				 *
-				 * @param String targetFormId
-				 * @param Object fieldsToProtect    jQuery object contains form fields to protect
+				 * Manually release form fields
 				 *
 				 * @return void
 				 */
-				releaseData: function( targetFormId, fieldsToProtect ) {
+				manuallyReleaseData: function() {
+					var self = this;
+					self.targets.each( function() {
+						var target = $( this );
+						var formIdAndName = getElementIdentifier( target );
+						self.releaseData( formIdAndName, self.findFieldsToProtect( target ) );
+					} );
+				},
+
+				/**
+				 * Bind release form fields data from local storage on submit/resett form
+				 *
+				 * @param String targetFormIdAndName	a form identifier consists of its id and name glued
+				 * @param Object fieldsToProtect		jQuery object contains form fields to protect
+				 *
+				 * @return void
+				 */
+				releaseData: function( targetFormIdAndName, fieldsToProtect ) {
 					var released = false;
 					var self = this;
+
+					// Released form, are not started anymore. Fix for ajax loaded forms.
+					params.started[ self.getInstanceIdentifier() ] = false;
+
 					fieldsToProtect.each( function() {
 						if ( $.inArray( this, self.options.excludeFields ) !== -1 ) {
 							// Returning non-false is the same as a continue statement in a for loop; it will skip immediately to the next iteration.
 							return true;
 						}
 						var field = $( this );
-						var prefix = self.href + targetFormId + field.attr( "name" ) + self.options.customKeyPrefix;
-						localStorage.removeItem( prefix );
+						var prefix = (self.options.locationBased ? self.href : "") + targetFormIdAndName + getElementIdentifier( field ) + self.options.customKeySuffix;
+						self.browserStorage.remove( prefix );
 						released = true;
 					} );
-				
-					if ( released && $.isFunction( self.options.onRelease ) ) {
-						self.options.onRelease.call();
+
+					if ( released ) {
+						self.options.onRelease.call( self );
 					}
 				}
-			
+
 			};
 		}
-	
+
 		return {
-		
-			getInstance: function() {
-				if ( ! params.instantiated ) {
-					params.instantiated = init();
-					params.instantiated.setInitialOptions();
+			getInstance: function( identifier ) {
+				if ( ! params.instantiated[ identifier ] ) {
+					params.instantiated[ identifier ] = init();
+					params.instantiated[ identifier ].setInstanceIdentifier( identifier );
+					params.instantiated[ identifier ].setInitialOptions();
 				}
-				return params.instantiated; 
+				if ( identifier ) {
+					return params.instantiated[ identifier ];
+				}
+				return params.instantiated[ identifier ];
 			},
-		
+
 			free: function() {
-				params = {};
+				params = {
+					instantiated: [],
+					started: []
+				};
 				return null;
-			}
+			},
+			version: '1.1.3'
 		};
 	} )();
 } )( jQuery );
